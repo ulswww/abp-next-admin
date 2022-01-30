@@ -37,16 +37,9 @@ public class QuartzJobExecutorProvider : IQuartzJobExecutorProvider, ISingletonD
             return null;
         }
 
-        var adapterType = typeof(QuartzJobSimpleAdapter<>);
-
-        // 注释, 通过触发器监听锁定
-        //if (job.LockTimeOut > 0)
-        //{
-        //    adapterType = typeof(QuartzJobConcurrentAdapter<>);
-        //}
-
         if (!typeof(IJob).IsAssignableFrom(jobType))
         {
+            var adapterType = typeof(QuartzJobSimpleAdapter<>);
             jobType = adapterType.MakeGenericType(jobType);
         }
 
@@ -54,12 +47,19 @@ public class QuartzJobExecutorProvider : IQuartzJobExecutorProvider, ISingletonD
         var jobBuilder = JobBuilder.Create(jobType)
                 .WithIdentity(KeyBuilder.CreateJobKey(job))
                 .WithDescription(job.Description);
-
+        // 查询任务需要
         jobBuilder.UsingJobData(nameof(JobInfo.Id), job.Id);
+        // 有些场景需要
+        jobBuilder.UsingJobData(nameof(JobInfo.Name), job.Name);
+        jobBuilder.UsingJobData(nameof(JobInfo.Type), job.Type);
+        jobBuilder.UsingJobData(nameof(JobInfo.Group), job.Group);
+        // 独占任务需要
         jobBuilder.UsingJobData(nameof(JobInfo.LockTimeOut), job.LockTimeOut);
+        // 传递的作业参数
         jobBuilder.UsingJobData(new JobDataMap(job.Args));
         if (job.TenantId.HasValue)
         {
+            // 用于多租户场景
             jobBuilder.UsingJobData(nameof(JobInfo.TenantId), job.TenantId.ToString());
         }
 

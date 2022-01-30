@@ -4,11 +4,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Quartz;
 using Quartz.Listener;
 using System;
-using System.Linq;
+using System.Collections.Immutable;
 using System.Threading;
 using System.Threading.Tasks;
 using Volo.Abp.DependencyInjection;
-using Volo.Abp.MultiTenancy;
 using Volo.Abp.Timing;
 
 namespace LINGYUN.Abp.BackgroundTasks.Quartz;
@@ -20,16 +19,13 @@ public class QuartzJobListener : JobListenerSupport, ISingletonDependency
     public override string Name => "QuartzJobListener";
 
     protected IClock Clock { get; }
-    protected IJobEventProvider EventProvider { get; }
     protected IServiceScopeFactory ServiceScopeFactory { get; }
 
     public QuartzJobListener(
         IClock clock,
-        IJobEventProvider eventProvider,
         IServiceScopeFactory serviceScopeFactory)
     {
         Clock = clock;
-        EventProvider = eventProvider;
         ServiceScopeFactory = serviceScopeFactory;
 
         Logger = NullLogger<QuartzJobListener>.Instance;
@@ -56,18 +52,14 @@ public class QuartzJobListener : JobListenerSupport, ISingletonDependency
             {
                 return;
             }
-            var jobEventList = EventProvider.GetAll();
-            if (!jobEventList.Any())
-            {
-                return;
-            }
 
             using var scope = ServiceScopeFactory.CreateScope();
             var jobEventData = new JobEventData(
                 jobId,
                 context.JobDetail.JobType,
                 context.JobDetail.Key.Group,
-                context.JobDetail.Key.Name)
+                context.JobDetail.Key.Name,
+                context.MergedJobDataMap.ToImmutableDictionary())
             {
                 Result = context.Result?.ToString()
             };
@@ -76,15 +68,8 @@ public class QuartzJobListener : JobListenerSupport, ISingletonDependency
                 scope.ServiceProvider,
                 jobEventData);
 
-            var index = 0;
-            var taskList = new Task[jobEventList.Count];
-            foreach (var jobEvent in jobEventList)
-            {
-                taskList[index] = jobEvent.OnJobBeforeExecuted(eventContext);
-                index++;
-            }
-
-            await Task.WhenAll(taskList);
+            var trigger = scope.ServiceProvider.GetRequiredService<IJobEventTrigger>();
+            await trigger.OnJobBeforeExecuted(eventContext);
         }
         catch (Exception ex)
         {
@@ -102,12 +87,6 @@ public class QuartzJobListener : JobListenerSupport, ISingletonDependency
                 return;
             }
 
-            var jobEventList = EventProvider.GetAll();
-            if (!jobEventList.Any())
-            {
-                return;
-            }
-
             using var scope = ServiceScopeFactory.CreateScope();
             var jobType = context.JobDetail.JobType;
             if (jobType.IsGenericType)
@@ -120,6 +99,7 @@ public class QuartzJobListener : JobListenerSupport, ISingletonDependency
                 jobType,
                 context.JobDetail.Key.Group,
                 context.JobDetail.Key.Name,
+                context.MergedJobDataMap.ToImmutableDictionary(),
                 jobException)
             {
                 Status = JobStatus.Running
@@ -140,25 +120,16 @@ public class QuartzJobListener : JobListenerSupport, ISingletonDependency
             {
                 jobEventData.Result = context.Result?.ToString();
             }
-            var tenantIdString = context.GetString(nameof(IMultiTenant.TenantId));
-            if (Guid.TryParse(tenantIdString, out var tenantId))
-            {
-                jobEventData.TenantId = tenantId;
-            }
+
+            context.TryGetMultiTenantId(out var tenantId);
+            jobEventData.TenantId = tenantId;
 
             var eventContext = new JobEventContext(
                 scope.ServiceProvider,
                 jobEventData);
 
-            var index = 0;
-            var taskList = new Task[jobEventList.Count];
-            foreach (var jobEvent in jobEventList)
-            {
-                taskList[index] = jobEvent.OnJobAfterExecuted(eventContext);
-                index++;
-            }
-
-            await Task.WhenAll(taskList);
+            var trigger = scope.ServiceProvider.GetRequiredService<IJobEventTrigger>();
+            await trigger.OnJobAfterExecuted(eventContext);
         }
         catch (Exception ex)
         {
